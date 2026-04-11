@@ -1,65 +1,166 @@
-import Image from "next/image";
+'use client'
 
-export default function Home() {
+import { useCallback, useEffect, useState } from 'react'
+import { Thermometer, Droplets, Activity, Cpu } from 'lucide-react'
+import { fetchMeasurements, fetchDevices, type Measurement, type TimeRange } from '@/lib/supabase'
+import KpiCard from '@/components/KpiCard'
+import TemperatureChart from '@/components/TemperatureChart'
+import HumidityChart from '@/components/HumidityChart'
+import DataTable from '@/components/DataTable'
+import FilterBar from '@/components/FilterBar'
+import AlertBar from '@/components/AlertBar'
+import ThemeToggle from '@/components/ThemeToggle'
+
+const ALERT_THRESHOLD = Number(process.env.NEXT_PUBLIC_ALERT_TEMP_THRESHOLD ?? 30)
+
+function avg(arr: number[]) {
+  if (!arr.length) return 0
+  return arr.reduce((a, b) => a + b, 0) / arr.length
+}
+
+function calcDelta(curr: Measurement[], prev: Measurement[], key: 'temperature' | 'humidity') {
+  const c = avg(curr.map((m) => m[key]))
+  const p = avg(prev.map((m) => m[key]))
+  if (!p) return undefined
+  return ((c - p) / p) * 100
+}
+
+export default function DashboardPage() {
+  const [data, setData] = useState<Measurement[]>([])
+  const [devices, setDevices] = useState<string[]>([])
+  const [range, setRange] = useState<TimeRange>('24h')
+  const [device, setDevice] = useState('all')
+  const [loading, setLoading] = useState(true)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [current, devList] = await Promise.all([
+        fetchMeasurements(range, device === 'all' ? undefined : device),
+        fetchDevices(),
+      ])
+      setData(current)
+      setDevices(devList)
+      setLastUpdated(new Date())
+    } catch {
+      setError('Nie można pobrać danych. Sprawdź konfigurację Supabase w .env.local')
+    } finally {
+      setLoading(false)
+    }
+  }, [range, device])
+
+  useEffect(() => { load() }, [load])
+
+  // Auto-refresh co 60s
+  useEffect(() => {
+    const interval = setInterval(load, 60_000)
+    return () => clearInterval(interval)
+  }, [load])
+
+  const mid = Math.ceil(data.length / 2)
+  const currHalf = data.slice(mid)
+  const prevHalf = data.slice(0, mid)
+
+  const latest = data.at(-1)
+  const latestTemp = latest?.temperature ?? null
+  const latestHum = latest?.humidity ?? null
+  const latestDevice = latest?.device_id ?? '—'
+  const hasAlert = latestTemp !== null && latestTemp > ALERT_THRESHOLD
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="min-h-dvh flex flex-col">
+      {/* Header */}
+      <header className="sticky top-0 z-20 border-b border-[var(--color-border)]
+        bg-[var(--color-surface)]/80 backdrop-blur-md">
+        <div className="max-w-screen-xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <svg width="26" height="26" viewBox="0 0 28 28" fill="none"
+              aria-label="IoT Dashboard logo" className="text-[var(--color-primary)]">
+              <rect x="2" y="2" width="10" height="10" rx="2" fill="currentColor" opacity="0.9"/>
+              <rect x="16" y="2" width="10" height="10" rx="2" fill="currentColor" opacity="0.5"/>
+              <rect x="2" y="16" width="10" height="10" rx="2" fill="currentColor" opacity="0.5"/>
+              <circle cx="21" cy="21" r="5" fill="currentColor"/>
+            </svg>
+            <span className="font-semibold tracking-tight">IoT Dashboard</span>
+            <span className="hidden sm:inline text-xs text-[var(--color-text-muted)] border
+              border-[var(--color-border)] rounded-full px-2 py-0.5">
+              Monitoring atmosferyczny
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {hasAlert && (
+              <span className="text-xs font-medium text-red-600 dark:text-red-400
+                bg-red-100 dark:bg-red-950/50 border border-red-300 dark:border-red-700
+                rounded-full px-2.5 py-0.5 animate-pulse">
+                ⚠ Alert temperatury
+              </span>
+            )}
+            <ThemeToggle />
+          </div>
+        </div>
+      </header>
+
+      {/* Main */}
+      <main className="flex-1 max-w-screen-xl mx-auto w-full px-4 sm:px-6 py-6 space-y-5">
+
+        {hasAlert && latestTemp !== null && (
+          <AlertBar temperature={latestTemp} threshold={ALERT_THRESHOLD} deviceId={latestDevice} />
+        )}
+
+        {error && (
+          <div className="rounded-xl border border-red-300 dark:border-red-700
+            bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-300">
+            {error}
+          </div>
+        )}
+
+        <FilterBar
+          range={range} onRangeChange={setRange}
+          device={device} devices={devices} onDeviceChange={setDevice}
+          onRefresh={load} loading={loading} lastUpdated={lastUpdated}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+
+        {/* KPI Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <KpiCard label="Aktualna temperatura" value={latestTemp?.toFixed(1) ?? '—'}
+            unit="°C" delta={calcDelta(currHalf, prevHalf, 'temperature')}
+            icon={<Thermometer size={18} />} alert={hasAlert} />
+          <KpiCard label="Aktualna wilgotność" value={latestHum?.toFixed(1) ?? '—'}
+            unit="%" delta={calcDelta(currHalf, prevHalf, 'humidity')}
+            icon={<Droplets size={18} />} />
+          <KpiCard label={`Śr. temp (${range})`}
+            value={data.length ? avg(data.map(m => m.temperature)).toFixed(1) : '—'}
+            unit="°C" icon={<Activity size={18} />} />
+          <KpiCard label="Pomiarów w zakresie" value={data.length}
+            icon={<Cpu size={18} />} />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+
+        {/* Charts & Table */}
+        {loading && !data.length ? (
+          <div className="grid sm:grid-cols-2 gap-4">
+            {[0, 1].map(i => (
+              <div key={i} className="rounded-xl border border-[var(--color-border)]
+                bg-[var(--color-surface)] h-[280px] animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <>
+            <div className="grid sm:grid-cols-2 gap-4">
+              <TemperatureChart data={data} threshold={ALERT_THRESHOLD} />
+              <HumidityChart data={data} />
+            </div>
+            <DataTable data={data} threshold={ALERT_THRESHOLD} />
+          </>
+        )}
       </main>
+
+      <footer className="border-t border-[var(--color-border)] py-4 text-center
+        text-xs text-[var(--color-text-muted)]">
+        IoT Dashboard · ESP32 + Supabase + Next.js · Auto-refresh co 60s
+      </footer>
     </div>
-  );
+  )
 }
